@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>网站可用性检测 · 四方法容灾 + 终极回退</title>
+</head>
+<body>
+    <!-- 纯内核版本：无UI界面，静默检测，支持四种探测方式 -->
+    <script>
+        (function() {
+            "use strict";
+
+            // ========== 可配置参数 ==========
+            const TARGET_WEBSITES = [
+                'https://0-nine-xi.vercel.app',
+                'https://kfcdo.netlify.app',
+                'https://static-mp-72749fb8-0b93-4d35-989e-829ae8ceaa58.next.bspapp.com',
+                'https://0.mm17177.workers.dev',
+                'https://jellyfish-app-2zbpw.ondigitalocean.app',
+                'https://zero-a2lf.onrender.com'
+            ];
+
+            const METHOD_TIMEOUT_MS = 1800;      // 每种探测方法的超时时间(ms)
+            const AUTO_REDIRECT = true;          // 是否自动跳转（false=仅检测）
+            const REDIRECT_DELAY_MS = 800;       // 跳转前延迟(ms)
+            
+            // ★ 最终备用网址：当所有目标网站均不可达时，直接跳转到此地址
+            const FALLBACK_URL = 'https://www.kfc.com.cn';
+            // =================================
+
+            class RobustAvailabilityChecker {
+                constructor(websites, methodTimeout = METHOD_TIMEOUT_MS) {
+                    this.websites = websites;
+                    this.methodTimeout = methodTimeout;
+                    this.availableWebsites = [];
+                }
+
+                // 1. Image 探测 (favicon)
+                testWithImage(url) {
+                    return new Promise((resolve) => {
+                        const img = new Image();
+                        const startTime = Date.now();
+                        let settled = false;
+
+                        const timer = setTimeout(() => {
+                            if (!settled) {
+                                settled = true;
+                                img.onload = img.onerror = null;
+                                resolve({ success: false, time: null, method: 'image' });
+                            }
+                        }, this.methodTimeout);
+
+                        img.onload = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                resolve({ success: true, time: Date.now() - startTime, method: 'image' });
+                            }
+                        };
+
+                        img.onerror = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                resolve({ success: false, time: null, method: 'image' });
+                            }
+                        };
+
+                        const cleanUrl = url.replace(/\/$/, '');
+                        img.src = `${cleanUrl}/favicon.ico?t=${Date.now()}`;
+                    });
+                }
+
+                // 2. Prefetch 探测
+                testWithPrefetch(url) {
+                    return new Promise((resolve) => {
+                        const link = document.createElement('link');
+                        link.rel = 'prefetch';
+                        link.href = url;
+                        link.as = 'document';
+                        let settled = false;
+                        const startTime = Date.now();
+
+                        const timer = setTimeout(() => {
+                            if (!settled) {
+                                settled = true;
+                                if (link.parentNode) link.parentNode.removeChild(link);
+                                resolve({ success: false, time: null, method: 'prefetch' });
+                            }
+                        }, this.methodTimeout);
+
+                        link.onload = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                if (link.parentNode) link.parentNode.removeChild(link);
+                                resolve({ success: true, time: Date.now() - startTime, method: 'prefetch' });
+                            }
+                        };
+
+                        link.onerror = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                if (link.parentNode) link.parentNode.removeChild(link);
+                                resolve({ success: false, time: null, method: 'prefetch' });
+                            }
+                        };
+
+                        document.head.appendChild(link);
+                    });
+                }
+
+                // 3. Script 探测 (随机js)
+                testWithScript(url) {
+                    return new Promise((resolve) => {
+                        const script = document.createElement('script');
+                        let settled = false;
+                        const startTime = Date.now();
+
+                        const timer = setTimeout(() => {
+                            if (!settled) {
+                                settled = true;
+                                script.onload = script.onerror = null;
+                                if (script.parentNode) script.parentNode.removeChild(script);
+                                resolve({ success: false, time: null, method: 'script' });
+                            }
+                        }, this.methodTimeout);
+
+                        script.onload = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                if (script.parentNode) script.parentNode.removeChild(script);
+                                resolve({ success: true, time: Date.now() - startTime, method: 'script' });
+                            }
+                        };
+
+                        script.onerror = () => {
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                if (script.parentNode) script.parentNode.removeChild(script);
+                                resolve({ success: false, time: null, method: 'script' });
+                            }
+                        };
+
+                        const token = Date.now() + Math.random().toString(36).substring(2, 8);
+                        const cleanUrl = url.replace(/\/$/, '');
+                        script.src = `${cleanUrl}/__avail_test_${token}.js`;
+                        document.head.appendChild(script);
+                    });
+                }
+
+                // 4. Fetch (no-cors) 探测 —— 新增方法，检测网络层可达性
+                testWithFetch(url) {
+                    return new Promise((resolve) => {
+                        const controller = new AbortController();
+                        const signal = controller.signal;
+                        const startTime = Date.now();
+                        let settled = false;
+
+                        const timer = setTimeout(() => {
+                            if (!settled) {
+                                settled = true;
+                                controller.abort();
+                                resolve({ success: false, time: null, method: 'fetch' });
+                            }
+                        }, this.methodTimeout);
+
+                        // 请求一个随机路径，no-cors 模式避免 CORS 阻塞
+                        const randomPath = `/__avail_fetch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+                        const cleanUrl = url.replace(/\/$/, '');
+                        fetch(cleanUrl + randomPath, {
+                            method: 'HEAD',
+                            mode: 'no-cors',
+                            cache: 'no-store',
+                            signal: signal
+                        }).then(() => {
+                            // no-cors 模式下，只要请求没有被网络层阻断，就会进入这里（即使服务器返回 404）
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                resolve({ success: true, time: Date.now() - startTime, method: 'fetch' });
+                            }
+                        }).catch((err) => {
+                            // 网络错误（DNS失败、连接拒绝、超时等）会触发 reject
+                            if (!settled) {
+                                settled = true;
+                                clearTimeout(timer);
+                                resolve({ success: false, time: null, method: 'fetch' });
+                            }
+                        });
+                    });
+                }
+
+                /**
+                 * 对单个站点执行多方法顺序探测（一旦成功立即返回）
+                 * 顺序: image → prefetch → script → fetch
+                 */
+                async probeSingleSite(url) {
+                    const methods = [
+                        () => this.testWithImage(url),
+                        //() => this.testWithPrefetch(url),
+                        //() => this.testWithScript(url),
+                        () => this.testWithFetch(url)
+                    ];
+
+                    for (let i = 0; i < methods.length; i++) {
+                        const result = await methods[i]();
+                        if (result.success) {
+                            console.log(`[✓] ${url} 可达 (${result.time}ms) [${result.method}]`);
+                            return { success: true, time: result.time, method: result.method };
+                        }
+                        console.log(`[↻] ${url} ${result.method} 失败，切换下一方法`);
+                    }
+                    console.log(`[✗] ${url} 不可达 (所有探测方法均失败)`);
+                    return { success: false, time: null, method: 'none' };
+                }
+
+                async checkAll() {
+                    console.log(`[四方法探测启动] 目标站点数: ${this.websites.length}, 每方法超时: ${this.methodTimeout}ms`);
+                    const startGlobal = Date.now();
+
+                    const probeTasks = this.websites.map(url => this.probeSingleSite(url));
+                    const results = await Promise.all(probeTasks);
+
+                    const successList = [];
+                    for (let idx = 0; idx < this.websites.length; idx++) {
+                        const res = results[idx];
+                        if (res.success) {
+                            successList.push({
+                                url: this.websites[idx],
+                                time: res.time,
+                                method: res.method
+                            });
+                        }
+                    }
+
+                    this.availableWebsites = successList.sort((a, b) => a.time - b.time);
+
+                    const elapsed = Date.now() - startGlobal;
+                    console.log(`[检测完成] 总耗时 ${elapsed}ms | 总计:${this.websites.length} 可用:${this.availableWebsites.length}`);
+
+                    if (this.availableWebsites.length === 0) {
+                        console.warn('[警告] 所有站点均不可达，将触发最终回退跳转');
+                    } else {
+                        console.group('[可用站点列表] (按响应速度排序)');
+                        this.availableWebsites.forEach((item, idx) => {
+                            console.log(`  ${idx+1}. ${item.url}  (${item.time}ms) [${item.method}]`);
+                        });
+                        console.groupEnd();
+                        const best = this.availableWebsites[0];
+                        console.log(`[最佳站点] ${best.url} (${best.time}ms) 通过 ${best.method} 方法验证`);
+                    }
+                    return this.availableWebsites;
+                }
+
+                getBestWebsiteUrl() {
+                    return this.availableWebsites.length ? this.availableWebsites[0].url : null;
+                }
+
+                redirectToBest() {
+                    const bestUrl = this.getBestWebsiteUrl();
+                    if (!bestUrl) return false;
+                    if (window.location.origin === bestUrl.replace(/\/$/, '')) {
+                        console.log('[跳过] 当前已是最佳站点');
+                        return false;
+                    }
+                    const fullPath = bestUrl + window.location.pathname + window.location.search + window.location.hash;
+                    console.log(`[自动跳转] 重定向至: ${fullPath}`);
+                    setTimeout(() => window.location.href = fullPath, REDIRECT_DELAY_MS);
+                    return true;
+                }
+
+                redirectToFallback() {
+                    if (!FALLBACK_URL) return false;
+                    if (window.location.href.startsWith(FALLBACK_URL)) {
+                        console.log('[最终回退] 当前已在备用网址');
+                        return false;
+                    }
+                    console.log(`[最终回退] 所有站点不可达，跳转至: ${FALLBACK_URL}`);
+                    setTimeout(() => window.location.href = FALLBACK_URL, REDIRECT_DELAY_MS);
+                    return true;
+                }
+            }
+
+            // 执行入口
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', runRobustDetection);
+            } else {
+                runRobustDetection();
+            }
+
+            async function runRobustDetection() {
+                const checker = new RobustAvailabilityChecker(TARGET_WEBSITES, METHOD_TIMEOUT_MS);
+                await checker.checkAll();
+
+                window.__availabilityReport = {
+                    best: checker.getBestWebsiteUrl(),
+                    availableList: checker.availableWebsites,
+                    timestamp: Date.now()
+                };
+
+                if (AUTO_REDIRECT) {
+                    const best = checker.getBestWebsiteUrl();
+                    if (best) {
+                        if (!window.location.href.startsWith(best)) checker.redirectToBest();
+                        else console.log('[自动重定向] 当前已是最优站点');
+                    } else {
+                        console.log('[自动重定向] 无可用站点，触发最终回退');
+                        checker.redirectToFallback();
+                    }
+                } else {
+                    const best = checker.getBestWebsiteUrl();
+                    console.log(`[手动模式] 最佳站点: ${best || '无'}`);
+                    if (!best) console.log(`[提示] 所有站点不可达，可手动访问: ${FALLBACK_URL}`);
+                }
+            }
+
+            // 暴露简易 API
+            window.RobustProbe = {
+                check: (websites, timeoutMs) => {
+                    const c = new RobustAvailabilityChecker(websites, timeoutMs);
+                    return c.checkAll().then(() => c.getBestWebsiteUrl());
+                }
+            };
+        })();
+    </script>
+</body>
+</html>
