@@ -11,16 +11,14 @@
 
             // ========== 可配置参数 ==========
             const TARGET_WEBSITES = [
-                //'https://0-nine-xi.vercel.app',
-                'https://kfcdo.netlify.app',
-                'https://static-mp-72749fb8-0b93-4d35-989e-829ae8ceaa58.next.bspapp.com',
-                //'https://0.mm17177.workers.dev',
-                'https://jellyfish-app-2zbpw.ondigitalocean.app',
-                'https://zero-a2lf.onrender.com'
+                'http://kfc.netlify.brmkweb.cn',
+                'http://kfc.digitalocean.brmkweb.cn',
+				'https://kfc.render.brmkweb.cn/',
+                'http://kfc.vercel.brmkweb.cn'
             ];
 
-            const METHOD_TIMEOUT_MS = 500;      // 每种探测方法的超时时间(ms)
-            const AUTO_REDIRECT = true;          // 是否自动跳转（false=仅检测）
+            const METHOD_TIMEOUT_MS = 1400;      // 每种探测方法的超时时间(ms)
+            const AUTO_REDIRECT = false;          // 是否自动跳转（false=仅检测true=发行）
             const REDIRECT_DELAY_MS = 0;       // 跳转前延迟(ms)
             
             // ★ 最终备用网址：当所有目标网站均不可达时，直接跳转到此地址
@@ -35,40 +33,66 @@
                 }
 
                 // 1. Image 探测 (favicon)
-                testWithImage(url) {
-                    return new Promise((resolve) => {
-                        const img = new Image();
-                        const startTime = Date.now();
-                        let settled = false;
-
-                        const timer = setTimeout(() => {
-                            if (!settled) {
-                                settled = true;
-                                img.onload = img.onerror = null;
-                                resolve({ success: false, time: null, method: 'image' });
-                            }
-                        }, this.methodTimeout);
-
-                        img.onload = () => {
-                            if (!settled) {
-                                settled = true;
-                                clearTimeout(timer);
-                                resolve({ success: true, time: Date.now() - startTime, method: 'image' });
-                            }
-                        };
-
-                        img.onerror = () => {
-                            if (!settled) {
-                                settled = true;
-                                clearTimeout(timer);
-                                resolve({ success: false, time: null, method: 'image' });
-                            }
-                        };
-
-                        const cleanUrl = url.replace(/\/$/, '');
-                        img.src = `${cleanUrl}/favicon.ico?t=${Date.now()}`;
-                    });
-                }
+testWithImage(url) {
+    return new Promise((resolve) => {
+        const img = new Image();
+        const startTime = Date.now();
+        let settled = false;
+        
+        // 只保留协议和域名部分
+        let baseUrl = url;
+        try {
+            const urlObj = new URL(url);
+            baseUrl = `${urlObj.protocol}//${urlObj.host}`;
+        } catch (e) {
+            // 无效URL
+            resolve({ success: false, time: null, method: 'image', error: 'invalid_url' });
+            return;
+        }
+        
+        const timer = setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                cleanup();
+                resolve({ success: false, time: null, method: 'image', error: 'timeout' });
+            }
+        }, this.methodTimeout);
+        
+        const cleanup = () => {
+            img.onload = null;
+            img.onerror = null;
+        };
+        
+        img.onload = () => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                cleanup();
+                resolve({ 
+                    success: true, 
+                    time: Date.now() - startTime, 
+                    method: 'image' 
+                });
+            }
+        };
+        
+        img.onerror = () => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                cleanup();
+                resolve({ 
+                    success: false, 
+                    time: null, 
+                    method: 'image',
+                    error: 'load_failed'
+                });
+            }
+        };
+        
+        img.src = `${baseUrl}/1x1.jpg?t=${Date.now()}`;
+    });
+}
 
                 // 2. Prefetch 探测
                 testWithPrefetch(url) {
@@ -199,10 +223,10 @@
                  */
                 async probeSingleSite(url) {
                     const methods = [
-                        () => this.testWithImage(url),
+                        () => this.testWithImage(url)
                         //() => this.testWithPrefetch(url),
                         //() => this.testWithScript(url),
-                        () => this.testWithFetch(url)
+                        //() => this.testWithFetch(url)
                     ];
 
                     for (let i = 0; i < methods.length; i++) {
