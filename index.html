@@ -40,7 +40,14 @@ testWithImage(url) {
         let settled = false;
         
         // 只保留协议和域名部分
-        let baseUrl = url;
+let baseUrl = url;
+// 如果传入的是相对路径或省略协议的地址，补全协议
+if (baseUrl.startsWith('http://')) {
+    baseUrl = baseUrl.replace('http://', 'https://');
+} else if (baseUrl.startsWith('//')) {
+    // 已经是协议相对路径，直接使用当前页面的协议
+    baseUrl = window.location.protocol + baseUrl;
+}
         try {
             const urlObj = new URL(url);
             baseUrl = `${urlObj.protocol}//${urlObj.host}`;
