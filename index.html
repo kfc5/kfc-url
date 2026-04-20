@@ -190,45 +190,79 @@ if (baseUrl.startsWith('http://')) {
 
                 // 4. Fetch (no-cors) 探测 —— 新增方法，检测网络层可达性
                 testWithFetch(url) {
-                    return new Promise((resolve) => {
-                        const controller = new AbortController();
-                        const signal = controller.signal;
-                        const startTime = Date.now();
-                        let settled = false;
+    return new Promise((resolve) => {
+        const controller = new AbortController();
+        const signal = controller.signal;
+        const startTime = performance.now();  // 使用 performance.now() 更精确
+        let settled = false;
 
-                        const timer = setTimeout(() => {
-                            if (!settled) {
-                                settled = true;
-                                controller.abort();
-                                resolve({ success: false, time: null, method: 'fetch' });
-                            }
-                        }, this.methodTimeout);
+        const timer = setTimeout(() => {
+            if (!settled) {
+                settled = true;
+                controller.abort();
+                resolve({ 
+                    success: false, 
+                    time: null, 
+                    method: 'fetch',
+                    error: 'timeout'
+                });
+            }
+        }, this.methodTimeout);
 
-                        // 请求一个随机路径，no-cors 模式避免 CORS 阻塞
-                        const randomPath = `/__avail_fetch_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-                        const cleanUrl = url.replace(/\/$/, '');
-                        fetch(cleanUrl + randomPath, {
-                            method: 'HEAD',
-                            mode: 'no-cors',
-                            cache: 'no-store',
-                            signal: signal
-                        }).then(() => {
-                            // no-cors 模式下，只要请求没有被网络层阻断，就会进入这里（即使服务器返回 404）
-                            if (!settled) {
-                                settled = true;
-                                clearTimeout(timer);
-                                resolve({ success: true, time: Date.now() - startTime, method: 'fetch' });
-                            }
-                        }).catch((err) => {
-                            // 网络错误（DNS失败、连接拒绝、超时等）会触发 reject
-                            if (!settled) {
-                                settled = true;
-                                clearTimeout(timer);
-                                resolve({ success: false, time: null, method: 'fetch' });
-                            }
-                        });
-                    });
-                }
+        // 不添加随机路径，直接请求目标URL
+        // 添加 cache buster 参数避免缓存
+        const cacheBuster = `_cb=${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+        const targetUrl = url + (url.includes('?') ? '&' : '?') + cacheBuster;
+        
+        fetch(targetUrl, {
+            method: 'HEAD',      // HEAD 请求只获取响应头，不下载body
+            mode: 'cors',        // 改用 cors 模式，但会受 CORS 限制
+            cache: 'no-store',
+            signal: signal
+        }).then(async (response) => {
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                
+                const endTime = performance.now();
+                const totalTime = endTime - startTime;
+                
+                // 尝试从 Performance API 获取更详细的数据
+                const entries = performance.getEntriesByType('resource');
+                const timingEntry = entries.find(e => e.name === targetUrl);
+                
+                resolve({
+                    success: true,
+                    time: totalTime,
+                    method: 'fetch',
+                    status: response.status,
+                    ok: response.ok,
+                    // 详细指标（如果可用）
+                    detailed: timingEntry ? {
+                        duration: timingEntry.duration,
+                        ttfb: timingEntry.responseStart - timingEntry.requestStart,
+                        dnsTime: timingEntry.domainLookupEnd - timingEntry.domainLookupStart,
+                        tcpTime: timingEntry.connectEnd - timingEntry.connectStart,
+                        downloadTime: timingEntry.responseEnd - timingEntry.responseStart,
+                        transferSize: timingEntry.transferSize
+                    } : null
+                });
+            }
+        }).catch((err) => {
+            // 网络错误（CORS阻断、DNS失败、连接拒绝等）
+            if (!settled) {
+                settled = true;
+                clearTimeout(timer);
+                resolve({ 
+                    success: false, 
+                    time: null, 
+                    method: 'fetch',
+                    error: err.message || 'network_error'
+                });
+            }
+        });
+    });
+}
 
                 /**
                  * 对单个站点执行多方法顺序探测（一旦成功立即返回）
@@ -236,10 +270,10 @@ if (baseUrl.startsWith('http://')) {
                  */
                 async probeSingleSite(url) {
                     const methods = [
-                        () => this.testWithImage(url)
+                        () => this.testWithImage(url),
                         //() => this.testWithPrefetch(url),
                         //() => this.testWithScript(url),
-                        //() => this.testWithFetch(url)
+                        () => this.testWithFetch(url)
                     ];
 
                     for (let i = 0; i < methods.length; i++) {
