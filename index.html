@@ -52,7 +52,7 @@
             ];
 
             const METHOD_TIMEOUT_MS = 1000;      // 每种探测方法的超时时间(ms)
-            const AUTO_REDIRECT = true;          // 是否自动跳转到最快站点
+            const AUTO_REDIRECT = false;          // 是否自动跳转到最快站点
             const REDIRECT_DELAY_MS = 0;        // 跳转前延迟(ms)
             const SHOW_DEBUG_PANEL = false;        // 是否显示调试面板
             const FALLBACK_URL = 'https://order.kfc.com.cn/preorder-taro/home';  // 备用网址
@@ -238,7 +238,8 @@
                         fetch(testUrl, {
                             method: 'HEAD',
                             cache: 'no-store',
-                            importance: 'high',
+							importance: 'high',
+							priority: 'high',
                             signal: signal
                         }).then(() => {
                             if (!settled) {
@@ -260,25 +261,25 @@
                     });
                 }
 
-                // 并行探测单个站点（谁快用谁）
-                async probeSingleSite(url) {
-                    const promises = [
-                        this.testWithPrefetch(url).then(r => ({ ...r, method: 'prefetch' })),
-                        this.testWithImage(url).then(r => ({ ...r, method: 'image' })),
-                        this.testWithFetch(url).then(r => ({ ...r, method: 'fetch' }))
-                    ];
-
-                    try {
-                        // Promise.any: 只要有一个成功就立即返回
-                        const result = await Promise.any(promises);
-                        const timeMs = Math.round(result.time);
-                        logger.log(`✅ ${url} - ${timeMs}ms [${result.method}]`);
-                        return { success: true, url, time: result.time, method: result.method };
-                    } catch (error) {
-                        logger.error(`❌ ${url} - 不可达 (所有探测方法均失败)`);
-                        return { success: false, url };
-                    }
-                }
+// 在 probeSingleSite 中，可以调整 Promise 的权重
+async probeSingleSite(url) {
+    // 给 fetch 更短的超时，让它更快失败或成功
+    const fetchPromise = this.testWithFetch(url).then(r => ({ ...r, method: 'fetch' }));
+    const prefetchPromise = this.testWithPrefetch(url).then(r => ({ ...r, method: 'prefetch' }));
+    const imagePromise = this.testWithImage(url).then(r => ({ ...r, method: 'image' }));
+    
+    // Promise.any 会自动选最快的成功者
+    const promises = [fetchPromise, prefetchPromise, imagePromise];
+    
+    try {
+        const result = await Promise.any(promises);
+        logger.log(`✅ ${url} - ${Math.round(result.time)}ms [${result.method}]`);
+        return { success: true, url, time: result.time, method: result.method };
+    } catch (error) {
+        logger.error(`❌ ${url} - 不可达`);
+        return { success: false, url };
+    }
+}
 
                 // 探测所有站点
                 async detectAll() {
