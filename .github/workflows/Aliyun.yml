@@ -21,4 +21,4 @@ jobs:
           folder: ./docs
           # 可选：设置为网站模式（自动配置 index.html 和 404.html）
           indexPage: index.html
-          errorPage: 404.html
+          notFoundPage: 404.html
